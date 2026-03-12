@@ -1,0 +1,13 @@
+{
+  "name": "rts-webgl-engine",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsc --watch",
+    "build": "tsc",
+    "serve": "npx http-server public"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
