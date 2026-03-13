@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Survie 3D - DRAGON vFinal</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root{--ui-bg:rgba(0,0,0,0.55);--accent:#2ecc71;--danger:#e74c3c}
+  html,body{height:100%;margin:0;background:#05060a;color:#fff;font-family:Inter,system-ui,Segoe UI,Roboto,Arial}
+  #canvasWrap{position:fixed;inset:0;overflow:hidden}
+  canvas{display:block}
+  .ui{position:fixed;z-index:20;pointer-events:none}
+  #hud{top:12px;left:12px;pointer-events:none;font-size:14px;text-shadow:0 0 6px #000}
+  #hud div{margin:6px 0}
+  #menu,#gameover,#pause{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;background:radial-gradient(circle at 30% 20%,#122033, #020308 70%);pointer-events:auto}
+  #menu h1,#gameover h2{margin:0;font-size:34px;letter-spacing:2px}
+  .btn{padding:10px 16px;border-radius:6px;border:none;background:var(--accent);color:#000;font-weight:700;cursor:pointer}
+  .smallBtn{padding:6px 10px;font-size:13px;border-radius:5px}
+  #shop{position:fixed;right:12px;bottom:12px;background:var(--ui-bg);padding:10px;border-radius:8px;pointer-events:auto;font-size:13px}
+  #shop h3{margin:0 0 6px 0}
+  #gameover{display:none;pointer-events:auto;text-align:center}
+  #pause{display:none;pointer-events:auto;text-align:center}
+  .stat{font-weight:700;color:var(--accent)}
+  #topScore{position:fixed;right:12px;top:12px;background:var(--ui-bg);padding:8px;border-radius:8px;font-size:13px}
+  footer{position:fixed;left:12px;bottom:12px;font-size:12px;opacity:0.8}
+</style>
+</head>
+<body>
+<div id="canvasWrap"></div>
+
+<div id="hud" class="ui">
+  <div>Vie : <span id="hp">100</span></div>
+  <div>Stamina : <span id="stamina">100</span></div>
+  <div>Temps : <span id="time">0.0</span>s</div>
+  <div>Pièces : <span id="coins">0</span></div>
+  <div>Inventaire : <span id="inventory">Medkit x0</span></div>
+</div>
+
+<div id="topScore" class="ui">Meilleur : <span id="best">0.0</span>s</div>
+
+<div id="menu">
+  <h1>SURVIE 3D — DRAGON</h1>
+  <p style="max-width:520px">Évite les ennemis rouges. Survis le plus longtemps possible. Achète medkits et boosts. Sprint avec Shift (consomme stamina). Utilise E pour medkit.</p>
+  <div style="display:flex;gap:10px">
+    <button id="startBtn" class="btn">Démarrer</button>
+    <button id="tutorialBtn" class="btn smallBtn">Tutoriel</button>
+  </div>
+</div>
+
+<div id="pause">
+  <h2>Pause</h2>
+  <div style="display:flex;gap:8px">
+    <button id="resumeBtn" class="btn smallBtn">Reprendre</button>
+    <button id="quitBtn" class="btn smallBtn" style="background:#e67e22;color:#000">Quitter</button>
+  </div>
+</div>
+
+<div id="gameover">
+  <h2>Game Over</h2>
+  <p>Temps survécu : <span id="finalTime">0.0</span>s</p>
+  <p>Pièces gagnées : <span id="finalCoins">0</span></p>
+  <div style="display:flex;gap:8px">
+    <button id="retryBtn" class="btn">Rejouer</button>
+    <button id="menuBtn" class="btn smallBtn" style="background:#3498db;color:#000">Menu</button>
+  </div>
+</div>
+
+<div id="shop" class="ui">
+  <h3>Boutique</h3>
+  <div>Medkit (soigne 30 PV) — 10 pièces</div>
+  <button id="buyMedkit" class="smallBtn" style="margin-top:6px">Acheter</button>
+  <hr style="opacity:0.12;margin:8px 0">
+  <div>Boost Sprint (30s) — 25 pièces</div>
+  <button id="buySprint" class="smallBtn" style="margin-top:6px">Acheter</button>
+</div>
+
+<footer>Contrôles : ZQSD / flèches • Sprint : Shift • Utiliser : E • Pause : Esc</footer>
+
+<!-- Three.js -->
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+
+<script>
+/* -------------------------
+   Configuration & assets
+   ------------------------- */
+const CONFIG = {
+  terrainSize: 40,
+  initialEnemies: 2,
+  maxEnemies: 8,
+  spawnInterval: 6, // sec
+  coinInterval: 2, // sec
+  medkitHeal: 30,
+  medkitCost: 10,
+  sprintBoostCost: 25,
+  sprintBoostDuration: 30, // sec
+  baseEnemySpeed: 2.5
+};
+
+// tiny base64 click sound (very short)
+const SOUND_CLICK = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
+
+/* -------------------------
+   State
+   ------------------------- */
+let scene, camera, renderer;
+let player, ground;
+let enemies = [];
+let lastSpawn = 0;
+let lastCoinTick = 0;
+let running = false;
+let paused = false;
+let startTime = 0;
+let elapsed = 0;
+let keys = {};
+let hp = 100;
+let stamina = 100;
+let coins = 0;
+let medkits = 0;
+let sprintBoostActive = false;
+let sprintBoostTimer = 0;
+let bestTime = parseFloat(localStorage.getItem('survie_best') || '0') || 0;
+
+/* -------------------------
+   UI refs
+   ------------------------- */
+const hudHP = document.getElementById('hp');
+const hudStam = document.getElementById('stamina');
+const hudTime = document.getElementById('time');
+const hudCoins = document.getElementById('coins');
+const hudInv = document.getElementById('inventory');
+const menu = document.getElementById('menu');
+const startBtn = document.getElementById('startBtn');
+const tutorialBtn = document.getElementById('tutorialBtn');
+const gameover = document.getElementById('gameover');
+const finalTime = document.getElementById('finalTime');
+const finalCoins = document.getElementById('finalCoins');
+const retryBtn = document.getElementById('retryBtn');
+const menuBtn = document.getElementById('menuBtn');
+const shopBuyMed = document.getElementById('buyMedkit');
+const shopBuySprint = document.getElementById('buySprint');
+const topBest = document.getElementById('best');
+const pauseScreen = document.getElementById('pause');
+const resumeBtn = document.getElementById('resumeBtn');
+const quitBtn = document.getElementById('quitBtn');
+
+/* -------------------------
+   Audio helpers
+   ------------------------- */
+function playClick() {
+  const a = new Audio(SOUND_CLICK);
+  a.volume = 0.6;
+  a.play().catch(()=>{});
+}
+
+/* -------------------------
+   Init Three.js scene
+   ------------------------- */
+function makeGridTexture() {
+  const size = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#1b2430';
+  ctx.fillRect(0,0,size,size);
+  ctx.strokeStyle = '#26313d';
+  ctx.lineWidth = 2;
+  for(let i=0;i<size;i+=32){
+    ctx.beginPath();
+    ctx.moveTo(i,0); ctx.lineTo(i,size); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0,i); ctx.lineTo(size,i); ctx.stroke();
+  }
+  return new THREE.CanvasTexture(canvas);
+}
+
+function init3D() {
+  const wrap = document.getElementById('canvasWrap');
+  renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  wrap.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x07101a);
+
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 200);
+  camera.position.set(0, 12, 18);
+  camera.lookAt(0,0,0);
+
+  // lights
+  const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+  dir.position.set(8, 20, 10);
+  dir.castShadow = true;
+  dir.shadow.mapSize.set(1024,1024);
+  dir.shadow.camera.left = -30; dir.shadow.camera.right = 30;
+  dir.shadow.camera.top = 30; dir.shadow.camera.bottom = -30;
+  scene.add(dir);
+
+  const amb = new THREE.AmbientLight(0x8aa0b0, 0.45);
+  scene.add(amb);
+
+  // ground
+  const groundMat = new THREE.MeshStandardMaterial({map: makeGridTexture(), roughness:0.9});
+  const groundGeo = new THREE.PlaneGeometry(CONFIG.terrainSize, CONFIG.terrainSize, 1,1);
+  ground = new THREE.Mesh(groundGeo, groundMat);
+  ground.rotation.x = -Math.PI/2;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // player
+  const pGeo = new THREE.BoxGeometry(1,1.6,1);
+  const pMat = new THREE.MeshStandardMaterial({color:0x3498db, metalness:0.1, roughness:0.6});
+  player = new THREE.Mesh(pGeo, pMat);
+  player.position.set(0,0.8,0);
+  player.castShadow = true;
+  scene.add(player);
+
+  // simple sky sphere
+  const skyGeo = new THREE.SphereGeometry(80, 16, 16);
+  const skyMat = new THREE.MeshBasicMaterial({color:0x071827, side:THREE.BackSide});
+  const sky = new THREE.Mesh(skyGeo, skyMat);
+  scene.add(sky);
+
+  window.addEventListener('resize', onResize);
+  window.addEventListener('keydown', (e)=> keys[e.key.toLowerCase()] = true);
+  window.addEventListener('keyup', (e)=> keys[e.key.toLowerCase()] = false);
+}
+
+function onResize(){
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+/* -------------------------
+   Enemy utilities
+   ------------------------- */
+function spawnEnemy() {
+  const geo = new THREE.SphereGeometry(0.7, 12, 12);
+  const mat = new THREE.MeshStandardMaterial({color:0xe74c3c, metalness:0.05, roughness:0.7});
+  const m = new THREE.Mesh(geo, mat);
+  // spawn at random edge
+  const s = CONFIG.terrainSize/2 - 2;
+  const side = Math.random();
+  let x = (Math.random()*2-1)*s;
+  let z = (Math.random()*2-1)*s;
+  if (side < 0.5) { x = (Math.random()<0.5)? -s : s; z = (Math.random()*2-1)*s; }
+  m.position.set(x, 0.7, z);
+  m.castShadow = true;
+  scene.add(m);
+  enemies.push({mesh:m, hp:100});
+}
+
+/* -------------------------
+   Game logic
+   ------------------------- */
+function resetGameState() {
+  // remove enemies
+  enemies.forEach(e=> scene.remove(e.mesh));
+  enemies = [];
+  lastSpawn = 0;
+  lastCoinTick = 0;
+  hp = 100;
+  stamina = 100;
+  coins = 0;
+  medkits = 0;
+  sprintBoostActive = false;
+  sprintBoostTimer = 0;
+  elapsed = 0;
+  startTime = performance.now();
+  // spawn initial enemies
+  for(let i=0;i<CONFIG.initialEnemies;i++) spawnEnemy();
+  updateHUD();
+}
+
+function updateHUD(){
+  hudHP.textContent = Math.max(0, Math.round(hp));
+  hudStam.textContent = Math.round(stamina);
+  hudTime.textContent = elapsed.toFixed(1);
+  hudCoins.textContent = coins;
+  hudInv.textContent = `Medkit x${medkits}`;
+  topBest.textContent = bestTime.toFixed(1);
+}
+
+function applyDamage(amount){
+  hp -= amount;
+  if (hp <= 0) {
+    hp = 0;
+    endGame();
+  }
+}
+
+function endGame(){
+  running = false;
+  gameover.style.display = 'flex';
+  finalTime.textContent = elapsed.toFixed(1);
+  finalCoins.textContent = coins;
+  if (elapsed > bestTime) {
+    bestTime = elapsed;
+    localStorage.setItem('survie_best', bestTime.toString());
+  }
+  updateHUD();
+}
+
+/* -------------------------
+   Shop actions
+   ------------------------- */
+shopBuyMed.addEventListener('click', ()=>{
+  if (!running) return;
+  if (coins >= CONFIG.medkitCost) {
+    coins -= CONFIG.medkitCost;
+    medkits += 1;
+    playClick();
+    updateHUD();
+  }
+});
+shopBuySprint.addEventListener('click', ()=>{
+  if (!running) return;
+  if (coins >= CONFIG.sprintBoostCost) {
+    coins -= CONFIG.sprintBoostCost;
+    sprintBoostActive = true;
+    sprintBoostTimer = CONFIG.sprintBoostDuration;
+    playClick();
+    updateHUD();
+  }
+});
+
+/* -------------------------
+   Input actions
+   ------------------------- */
+function useMedkit(){
+  if (medkits > 0 && hp < 100) {
+    medkits--;
+    hp = Math.min(100, hp + CONFIG.medkitHeal);
+    playClick();
+    updateHUD();
+  }
+}
+
+/* -------------------------
+   Main update loop
+   ------------------------- */
+let lastFrame = 0;
+function loop(t){
+  requestAnimationFrame(loop);
+  if (!running || paused) {
+    renderer.render(scene, camera);
+    lastFrame = t;
+    return;
+  }
+  const dt = Math.min(0.05, (t - lastFrame)/1000 || 0.016);
+  lastFrame = t;
+  elapsed = (t - startTime)/1000;
+
+  // spawn logic
+  if (t - lastSpawn > CONFIG.spawnInterval*1000 && enemies.length < CONFIG.maxEnemies) {
+    spawnEnemy();
+    lastSpawn = t;
+  }
+
+  // coin awarding every CONFIG.coinInterval seconds
+  if (Math.floor(elapsed) > 0 && Math.floor(elapsed) % CONFIG.coinInterval === 0 && Math.floor(elapsed) !== lastCoinTick) {
+    coins += 1;
+    lastCoinTick = Math.floor(elapsed);
+  }
+
+  // player movement
+  let moveX = 0, moveZ = 0;
+  if (keys['z'] || keys['arrowup']) moveZ -= 1;
+  if (keys['s'] || keys['arrowdown']) moveZ += 1;
+  if (keys['q'] || keys['arrowleft']) moveX -= 1;
+  if (keys['d'] || keys['arrowright']) moveX += 1;
+  const moving = moveX !== 0 || moveZ !== 0;
+  let speed = 5;
+  const sprinting = (keys['shift'] || keys['shiftleft'] || keys['shiftright']) && stamina > 5 && moving;
+  if (sprinting) {
+    speed = sprintBoostActive ? 10 : 8;
+    stamina = Math.max(0, stamina - 30*dt);
+  } else {
+    stamina = Math.min(100, stamina + 20*dt);
+  }
+  // normalize
+  const len = Math.hypot(moveX, moveZ) || 1;
+  player.position.x += (moveX/len) * speed * dt;
+  player.position.z += (moveZ/len) * speed * dt;
+  // clamp to terrain
+  const s = CONFIG.terrainSize/2 - 1;
+  player.position.x = THREE.MathUtils.clamp(player.position.x, -s, s);
+  player.position.z = THREE.MathUtils.clamp(player.position.z, -s, s);
+
+  // enemies behavior
+  enemies.forEach((e, idx) => {
+    const ex = e.mesh.position.x, ez = e.mesh.position.z;
+    const px = player.position.x, pz = player.position.z;
+    let vx = px - ex, vz = pz - ez;
+    const dist = Math.hypot(vx, vz) || 1;
+    vx /= dist; vz /= dist;
+    const difficultyFactor = 1 + elapsed*0.03;
+    const espeed = (CONFIG.baseEnemySpeed + idx*0.1) * difficultyFactor;
+    e.mesh.position.x += vx * espeed * dt;
+    e.mesh.position.z += vz * espeed * dt;
+
+    // collision
+    if (dist < 1.2) {
+      applyDamage(18 * dt); // progressive damage
+    }
+  });
+
+  // camera follow
+  camera.position.x = THREE.MathUtils.lerp(camera.position.x, player.position.x, 0.08);
+  camera.position.z = THREE.MathUtils.lerp(camera.position.z, player.position.z + 14, 0.08);
+  camera.lookAt(player.position.x, 1, player.position.z);
+
+  // sprint boost timer
+  if (sprintBoostActive) {
+    sprintBoostTimer -= dt;
+    if (sprintBoostTimer <= 0) sprintBoostActive = false;
+  }
+
+  updateHUD();
+  renderer.render(scene, camera);
+}
+
+/* -------------------------
+   UI events
+   ------------------------- */
+startBtn.addEventListener('click', ()=>{
+  menu.style.display = 'none';
+  gameover.style.display = 'none';
+  pauseScreen.style.display = 'none';
+  resetGameState();
+  running = true;
+  paused = false;
+  lastFrame = performance.now();
+  startTime = performance.now();
+  requestAnimationFrame(loop);
+});
+
+retryBtn.addEventListener('click', ()=>{
+  gameover.style.display = 'none';
+  resetGameState();
+  running = true;
+  paused = false;
+  lastFrame = performance.now();
+  startTime = performance.now();
+});
+
+menuBtn.addEventListener('click', ()=>{
+  gameover.style.display = 'none';
+  menu.style.display = 'flex';
+  running = false;
+});
+
+document.addEventListener('keydown', (e)=>{
+  if (e.key.toLowerCase() === 'e') useMedkit();
+  if (e.key === 'Escape') {
+    if (!running) return;
+    paused = !paused;
+    pauseScreen.style.display = paused ? 'flex' : 'none';
+  }
+});
+
+resumeBtn.addEventListener('click', ()=>{
+  paused = false;
+  pauseScreen.style.display = 'none';
+});
+quitBtn.addEventListener('click', ()=>{
+  paused = false;
+  running = false;
+  pauseScreen.style.display = 'none';
+  menu.style.display = 'flex';
+});
+
+/* -------------------------
+   Boot
+   ------------------------- */
+init3D();
+updateHUD();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
